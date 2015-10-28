@@ -1,2 +1,2 @@
-# Command-Line-Interface
+# Command-Line-Interpreter
 A java tool that simulates the terminal in ubuntu.(Still working on)
