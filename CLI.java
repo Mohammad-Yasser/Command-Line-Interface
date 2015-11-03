@@ -1,95 +1,224 @@
-import java.io.*;
-import java.nio.file.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Scanner;
 
 import static java.nio.file.StandardCopyOption.*;
 import static java.nio.file.LinkOption.*;
 
-public class CLI {
 
-	public static final String ANSI_RESET = "\u001B[0m";
-	public static final String ANSI_BLACK = "\u001B[30m";
-	public static final String ANSI_RED = "\u001B[31m";
-	public static final String ANSI_GREEN = "\u001B[32m";
-	public static final String ANSI_YELLOW = "\u001B[33m";
-	public static final String ANSI_BLUE = "\u001B[34m";
-	public static final String ANSI_PURPLE = "\u001B[35m";
-	public static final String ANSI_CYAN = "\u001B[36m";
-	public static final String ANSI_WHITE = "\u001B[37m";
+public class CommandLineInterface {
+	private static final String[] validCommands = { "pwd", "ls", "cd", "cp",
+		"mv", "rm", "rmdir", "mkdir", "cat", "more", "less", "date", "clear"
+		, "find", "grep"};
 
 	private static File currentPath;
-	private static String userName = "mohammad"; // To be set on the program
-													// start
 
-	private static void cd() {
-		cd("/home/" + userName);
+	private static abstract class Executable {
+		public abstract void execute(ArrayList<String> args);
 	}
 
+	public static Executable[] methods = {
+			new Executable() {public void execute(ArrayList<String> args) {pwd();}}, 
+			new Executable() {public void execute(ArrayList<String> args) {ls();}}, 
+			new Executable() {public void execute(ArrayList<String> args) {cd(args);}}, 
+			new Executable() {public void execute(ArrayList<String> args) {cp(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {mv(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {rm(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {rmdir(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {mkdir(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {cat(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {more(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {less(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {date();}},
+			new Executable() {public void execute(ArrayList<String> args) {clear();}},
+			new Executable() {public void execute(ArrayList<String> args) {find(args);}},
+			new Executable() {public void execute(ArrayList<String> args) {grep(args);}}
+	};
+
+	public static void run() {
+		final String PROMPT = "$ ";
+		Scanner keyboard = new Scanner(System.in);
+		currentPath = new File(System.getProperty("user.home"));
+		while (true) {
+			System.out.print(PROMPT);
+			String line = keyboard.nextLine();
+
+			if (line.trim().compareTo("exit") == 0)
+				break;
+
+			String[] commands = line.split(";");
+
+			for (int i = 0; i < commands.length; ++i) {
+				execute(commands[i]);
+			}
+		}
+		keyboard.close();
+	}
+
+	private static void execute(String commandLine) {
+		writeToConsole();
+		ArrayList<String> args = new ArrayList<String>();
+		String command = parse(commandLine, args);
+		boolean found = false;
+		for (int i = 0; i < validCommands.length; i++) {
+			if (command.compareTo(validCommands[i]) == 0) {
+				methods[i].execute(args);
+				found = true;
+				break;
+			}
+		}
+		if (!found && command.length() > 0)
+			System.out.println(command + ": command not found");
+		writeToConsole();
+	}
+
+	private static String parse(String commandLine, ArrayList<String> args) {
+		String[] splitted = commandLine.split(" ");
+		boolean commandFound = false, stop = false;
+		String command = new String();
+		for (int i = 0; i < splitted.length; ++i) {
+			splitted[i] = splitted[i].trim();
+			if (splitted[i].length() > 0) {
+				if (commandFound) {
+					if (splitted[i].equals(">") || splitted[i].equals(">>")) {
+						if (i + 1 == splitted.length)
+							System.out.println("Error redirecting output");
+						else
+							writeToFile(splitted[i + 1], splitted[i].equals(">>"));
+						stop = true;
+					}
+					if (!stop)
+						args.add(splitted[i]);
+				} else {
+					command = splitted[i];
+					commandFound = true;
+				}
+			}
+		}
+		return command;
+	}
+	
+	//////////////////// Commands //////////////////////////////////////
+	
 	private static boolean relativePath(String path) {
-		return path.length() < 5 || !path.substring(0, 5).equals("/home");
+		return path.charAt(0) != '/';
 	}
 
-	private static String normalizePath(String path) {
-		if (path.charAt(0) != '/')
-			path = "/" + path;
+	private static String getFullPath(String path) {
 		if (relativePath(path))
-			path = currentPath.getPath() + path;
+			path = currentPath.getPath() + "/" + path;
 		return path;
 	}
-
-	private static void cd(String path) {
-		path = normalizePath(path);
-		currentPath = new File(path);
+	
+	private static void pwd() {
+		System.out.println(currentPath.getAbsolutePath());
+	}
+	
+	private static void cd(ArrayList<String> args) {
+		if (args.size() == 0) {
+			currentPath = new File(System.getProperty("user.home"));
+			return;
+		}
+		File temp = new File(getFullPath(args.get(0)));
+		if (temp.isDirectory())
+			currentPath = new File(getFullPath(args.get(0)));
+		else
+			System.out.println("Error! Not a directory.");
+		String editedPath = currentPath.getAbsolutePath();
+		while (editedPath.contains("/..")) {
+			int idx = editedPath.indexOf("/..");
+			String firstHalf = editedPath.substring(0, idx);
+			String secondHalf = editedPath.substring(idx + 3);
+			editedPath = firstHalf.substring(0, firstHalf.lastIndexOf('/')) + secondHalf;
+		}
+		while (editedPath.contains("/.") && (editedPath.indexOf("/.") + 2 == 
+				editedPath.length() || editedPath.charAt(editedPath.indexOf("/.") + 2) == '/')) {
+			int idx = editedPath.indexOf("/.");
+			String firstHalf = editedPath.substring(0, idx);
+			String secondHalf = editedPath.substring(idx + 2);
+			editedPath = firstHalf + secondHalf;
+		}
+		currentPath = new File(editedPath);
 	}
 
 	private static void ls() {
-		File[] listOfFilesAndFolders = currentPath.listFiles();
-		for (int i = 0; i < listOfFilesAndFolders.length; ++i)
-			if (listOfFilesAndFolders[i].isFile())
-				System.out.println(ANSI_PURPLE + listOfFilesAndFolders[i].getName() + ANSI_RESET);
+		final String ANSI_RESET = "\u001B[0m";
+		final String ANSI_PURPLE = "\u001B[35m";
+		final String ANSI_CYAN = "\u001B[36m";
+		File[] list = currentPath.listFiles();
+		for (int i = 0; i < list.length; ++i)
+			if (list[i].isFile())
+				System.out.println(ANSI_PURPLE + list[i].getName() + ANSI_RESET);
 			else
-				System.out.println(ANSI_CYAN + listOfFilesAndFolders[i].getName() + ANSI_RESET);
+				System.out.println(ANSI_CYAN + list[i].getName() + ANSI_RESET);
 	}
-
-	private static void cp(String[] sources, String dest) throws IOException {
-
-		dest = normalizePath(dest);
-		for (int i = 0; i < sources.length; ++i) {
-			cp(sources[i], dest);
+	
+	private static void cp(ArrayList<String> args) {
+		if (args.size() < 2) {
+			System.out.println("Too few arguments.");
+			return;
+		}
+		
+		String destinationPath = getFullPath(args.get(args.size() - 1));
+		for (int i = 0; i + 1 < args.size(); ++i) {
+			String sourcePath = args.get(i);
+			File sourceFile = new File(getFullPath(sourcePath));
+	
+			if (sourceFile.isDirectory()) {
+				System.out.println("Failed to copy \'" + sourcePath + "\': Is a directory");
+				continue;
+			}
+			
+			cp(sourceFile, new File(destinationPath));
 		}
 	}
+	
+	private static void cp(File sourceFile, File destinationFile) {
+		String destinationPath = destinationFile.getAbsolutePath();
+		String tempDest = destinationFile.getAbsolutePath() + "/" + sourceFile.getName();
+		destinationFile = new File(tempDest);
 
-	private static void cp(String sourcePath, String dest) throws IOException {
-		dest = normalizePath(dest);
-		sourcePath = normalizePath(sourcePath);
-		File sourceFile = new File(sourcePath);
-
-		String tmpDest = dest + "/" + sourceFile.getName();
-		File destination = new File(tmpDest);
-
-		if (!sourceFile.isDirectory() || !destination.exists())
-			Files.copy(sourceFile.toPath(), destination.toPath(), REPLACE_EXISTING, NOFOLLOW_LINKS);
+		if (!sourceFile.isDirectory() || !destinationFile.exists()) {
+			try {
+				Files.copy(sourceFile.toPath(), destinationFile.toPath(), REPLACE_EXISTING, NOFOLLOW_LINKS);
+			} catch (IOException e) {
+				System.out.println("Invalid path.");
+			}
+		}
+		
 		if (sourceFile.isDirectory()) {
-			String[] listOfFiles = FilesToStrings(sourceFile.listFiles());
-			cp(listOfFiles, dest + "/" + sourceFile.getName());
+			File[] list = sourceFile.listFiles();
+			for (int i = 0; i < list.length; ++i) {
+				cp(list[i], new File(destinationPath + "/" + sourceFile.getName()));
+			}
 		}
 	}
 
-	private static String[] FilesToStrings(File[] files) {
-		String[] strings = new String[files.length];
-		for (int i = 0; i < files.length; ++i)
-			strings[i] = files[i].getPath();
-		return strings;
-	}
-
-	private static void mv(String[] sources, String dest) throws IOException {
-		cp(sources, dest);
-		for (int i = 0; i < sources.length; i++) {
-			rm(sources[i]);
+	private static void mv(ArrayList<String> args) {
+		if (args.size() < 2) {
+			System.out.println("Too few arguments");
+			return;
+		}
+		File destination = new File(getFullPath(args.get(args.size() - 1)));
+		for (int i = 0; i + 1 < args.size(); i++) {
+			File toMove = new File(getFullPath(args.get(i)));
+			cp(toMove, destination);
+			rm(toMove);
 		}
 	}
 
-	private static void rm(File targetFile) throws IOException {
+	private static void rm(File targetFile) {
 		if (targetFile.isDirectory()) {
 			File[] listOfFiles = targetFile.listFiles();
 			for (int i = 0; i < listOfFiles.length; i++) {
@@ -97,89 +226,194 @@ public class CLI {
 			}
 		}
 
-		Files.delete(targetFile.toPath());
-	}
-
-	private static void rm(String target) throws IOException {
-		target = normalizePath(target);
-		File targetFile = new File(target);
-		rm(targetFile);
-	}
-
-	private static void mkdir(String dir) {
-		dir = normalizePath(dir);
-		new File(dir).mkdirs();
-	}
-
-	private static void cat(String[] targets) throws IOException {
-		for (int i = 0; i < targets.length; ++i) {
-			targets[i] = normalizePath(targets[i]);
-			BufferedReader reader = new BufferedReader(new FileReader(targets[i]));
-			String line;
-			while ((line = reader.readLine()) != null)
-				System.out.println(line);
+		try {
+			Files.delete(targetFile.toPath());
+		} catch (IOException e) {
+			System.out.println("Invalid path.");
 		}
 	}
 
-	private static void rmdir(String target) throws IOException {
-		rm(target);
-	}
-
-	private static void pwd() {
-		System.out.println(currentPath.getAbsolutePath());
-	}
-
-	private static void more(String target) throws IOException {
-		target = normalizePath(target);
-		BufferedReader reader = new BufferedReader(new FileReader(target));
-		String line = null, inputLine;
-		final int numberOfLines = 32;
-
-		Scanner input = new Scanner(System.in);
-
-		do {
-			for (int i = 0; i < numberOfLines; ++i) {
-				line = reader.readLine();
-				if (line == null)
-					System.out.println();
-				else
-					System.out.println(line);
+	private static void rm(ArrayList<String> args) {
+		if (args.size() == 0)
+			System.out.println("Too few arguments.");
+		for (int i = 0; i < args.size(); ++i) {
+			String path = args.get(i);
+			File targetFile = new File(getFullPath(path));
+			if (!targetFile.isFile()) {
+				System.out.println("Failed to remove \'" + path + "\': Is a directory");
+				continue;
 			}
-
-			inputLine = input.nextLine();
-
-		} while (line != null && (inputLine.length() == 0));
-		input.close();
-		reader.close();
+			rm(targetFile);
+		}
 	}
-
-	private static void less(String target) throws IOException {
-		target = normalizePath(target);
-		BufferedReader reader = new BufferedReader(new FileReader(target));
-		String line = null, inputLine;
-		final int numberOfLines = 32;
-
-		Scanner input = new Scanner(System.in);
-
-		do {
-			for (int i = 0; i < numberOfLines; ++i) {
-				line = reader.readLine();
-				if (line == null)
-					System.out.println();
-				else
-					System.out.println(line);
+	
+	private static void rmdir(ArrayList<String> args) {
+		if (args.size() == 0)
+			System.out.println("Too few arguments.");
+		for (int i = 0; i < args.size(); ++i) {
+			String path = args.get(i);
+			File f = new File(getFullPath(path));
+			if (!f.isDirectory()) {
+				System.out.println("Failed to remove \'" + path + "\': Not a directory");
+				continue;
 			}
-
-			inputLine = input.nextLine();
-			System.out.println(inputLine.length());
-		} while (line != null && (inputLine.length() == 0));
-		input.close();
-		reader.close();
+			if (f.listFiles().length != 0) {
+				System.out.println("Failed to remove \'" + path + "\': Directory not empty");
+				continue;	
+			}
+			rm(f);
+		}
 	}
 
-	public static void main(String[] args) throws IOException, InterruptedException {
+	private static void mkdir(ArrayList<String> args) {
+		String dir = getFullPath(args.get(0));
+		new File(dir).mkdirs();
+	}
+
+	private static void cat(ArrayList<String> args) {
+		if (args.size() == 0)
+			return;
+		for (int i = 0; i < args.size(); ++i) {
+			BufferedReader reader;
+			try {
+				reader = new BufferedReader(new FileReader(getFullPath(args.get(i))));
+			} catch (FileNotFoundException e) {
+				System.out.println("Error! File not found");
+				continue;
+			}
+			String line = new String("");
+			while (true) {
+				try {
+					line = reader.readLine();
+				} catch (IOException e) {
+					System.out.println("Error while reading file.");
+				}
+				if (line == null)
+					break;
+				System.out.println(line);
+			}
+			try {
+				reader.close();
+			} catch (IOException e) {
+				System.out.println("Error while closing the reader.");
+			}
+		}
+	}
+
+	private static void more(ArrayList<String> args) {
+		for (int j = 0; j < args.size(); ++j) {
+			File file = new File(getFullPath(args.get(j)));
+			if (args.size() > 1)
+				System.out.println(file.getName() + "\n" + "::::::::::::::::::::::::");
+			BufferedReader reader;
+			try {
+				reader = new BufferedReader(new FileReader(file.getAbsolutePath()));
+			} catch (FileNotFoundException e) {
+				System.out.println("Error! File not found");
+				return;
+			}
+			String line = null, inputLine = new String();
+			final int numberOfLines = 32;
+	
+			Scanner input = new Scanner(System.in);
+	
+			do {
+				for (int i = 0; i < numberOfLines; ++i) {
+					try {
+						line = reader.readLine();
+					} catch (IOException e) {
+						System.out.println("Error!");
+						return;
+					}
+					if (line != null)
+						System.out.println(line);
+				}
+	
+				if (line != null)
+					inputLine = input.nextLine();
+	
+			} while (line != null && (inputLine.length() == 0));
+			if (args.size() > 1)
+				System.out.println("::::::::::::::::::::::::");
+		}
+	}
+
+	private static void less(ArrayList<String> args) {
+		more(args);
+	}
 		
-
+	private static void writeToFile(String filePath, boolean append) {
+		try {
+			System.setOut(new PrintStream(new FileOutputStream(getFullPath(filePath), append)));
+		} catch (FileNotFoundException e) {
+			System.out.println("File not found.");
+		}
 	}
 
+	private static void writeToConsole() {
+		System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out)));
+	}
+	
+	private static void date() {
+		DateFormat dateFormat = new SimpleDateFormat("E yyyy/MM/dd HH:mm:ss");
+		Calendar cal = Calendar.getInstance();
+		System.out.println(dateFormat.format(cal.getTime()));
+	}
+	
+	private static void clear() {
+		for (int i = 0; i < 64; ++i)
+			System.out.print("\n");
+//		for (int i = 0; i < 32; ++i)
+//			System.out.print("\b");
+	}
+	
+	private static void find(ArrayList<String> args) {
+		if (args.size() < 2) {
+			System.out.println("Too few arguments.");
+			return;
+		}
+		String name = args.get(0);
+		String path = getFullPath(args.get(1));
+		find(name, new File(path));
+	}
+
+	private static void find(String name, File directory) {
+		File[] list = directory.listFiles();
+		for (int i = 0; i < list.length; i++) {
+			if (list[i].isFile()) {
+				if (list[i].getName().equals(name))
+					System.out.println(list[i].getAbsolutePath());
+			} else if (list[i].isDirectory()) {
+				find(name, new File(list[i].getAbsolutePath()));
+			}
+		}
+	}
+	
+	private static void grep(ArrayList<String> args) {
+		if (args.size() < 2) {
+			System.out.println("Too few arguments");
+			return;
+		}
+		String text = args.get(0);
+		String fileName = args.get(1);
+		Scanner reader;
+		try {
+			reader = new Scanner(new File(getFullPath(fileName)));
+		} catch (FileNotFoundException e) {
+			System.out.println("File not found.");
+			return;
+		}
+		while (reader.hasNextLine()) {
+			String line = reader.nextLine();
+			if (line.contains(text)) {
+				System.out.println(line);
+			}
+		}
+		reader.close();
+	}
+	
+	//////////////////// main ////////////////////////
+	public static void main(String[] args) {
+		CommandLineInterface.run();
+	}
 }
